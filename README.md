@@ -1,0 +1,55 @@
+# USDJPY Chart Analyzer
+
+iPhoneのSafariで使うドル円チャート分析アプリ(PWA)。純粋なHTML/CSS/JSのみで、サーバー不要。
+
+## 機能
+- ローソク足チャート(1分/5分/15分/1時間/4時間/日足)
+- 移動平均(MA20/50)・ボリンジャーバンド・RSI(14)・MACD(12,26,9)
+- **自動検出**: 直近で効いている水平サポート/レジスタンス、トレンドライン、レンジ(もみ合い)、チャネル
+  - スイングハイ/ロー(フラクタル)を検出し、水平線はクラスタリング+タッチ回数+直近性でスコア付け
+  - トレンドラインは凸包(convex hull)アルゴリズムで直近の有効な線を抽出
+  - あくまでヒューリスティックです。値の精度を保証するものではなく、目安としてご利用ください
+- 価格アラート(閾値超え/割れで通知音+トースト+ブラウザ通知)
+- ホーム画面に追加してアプリのように起動(PWA, オフラインでも画面の外殻は表示)
+
+## 1. データAPIキーの取得(Twelve Data、無料)
+1. https://twelvedata.com/pricing の Free プランで登録(クレジットカード不要)
+2. ダッシュボードで API Key をコピー
+3. アプリ右上の⚙️設定から貼り付けて保存
+   - キーは端末のブラウザ内(localStorage)にのみ保存され、外部には送信されません
+   - 無料プランは 8 リクエスト/分, 800 リクエスト/日 の制限があるため、設定の自動更新間隔は30秒以上を推奨
+
+## 2. GitHub Pagesへのデプロイ
+```bash
+cd usdjpy-chart-app
+git init
+git add index.html manifest.json sw.js icons README.md
+git commit -m "USDJPY chart analyzer app"
+```
+GitHubで新しいリポジトリ(例: `usdjpy-chart-app`)を作成し、push:
+```bash
+git remote add origin https://github.com/<あなたのユーザー名>/usdjpy-chart-app.git
+git branch -M main
+git push -u origin main
+```
+リポジトリの **Settings → Pages** で、Source を `main` ブランチ / `/ (root)` に設定して保存。
+数分後に `https://<あなたのユーザー名>.github.io/usdjpy-chart-app/` でアクセス可能になります。
+
+(`gen_icon.py` はアイコン生成用のスクリプトで、デプロイには不要です。pushしなくても問題ありません。)
+
+## 3. iPhoneでホーム画面に追加
+1. iPhoneのSafariで上記URLを開く
+2. 共有ボタン(□に↑) → 「ホーム画面に追加」
+3. ホーム画面のアイコンから起動すると、アドレスバーのないアプリ風の画面で開きます
+
+## 既知の制約
+- **プッシュ通知はアプリを開いている間のみ**です。ロック画面やアプリを閉じた状態での通知には、別途サーバー側のWeb Push実装が必要です(フェーズ2として対応可能)。
+- 自動検出ロジック(水平線・トレンドライン・レンジ・チャネル)はルールベースの近似です。パラメータ(タッチ許容誤差、本数、レンジ判定の感度など)は設定画面から調整できます。
+- OANDA証券のAPIは会員ステータス(ゴールド以上・プロコース・残高25万円以上)が必要なため、現時点ではTwelve Dataを採用しています。将来的に条件を満たせばOANDA APIへの切り替えも可能です。
+
+## ローカルでの動作確認
+```bash
+cd usdjpy-chart-app
+python3 -m http.server 8532
+```
+ブラウザで `http://localhost:8532` を開く(`file://` で直接開くと `localStorage` が使えず動作しません)。

@@ -1,0 +1,868 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+<title>USDJPY Chart Analyzer</title>
+<meta name="theme-color" content="#0f1720">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="USDJPY">
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icons/icon-180.png">
+<link rel="icon" href="icons/icon-192.png">
+<style>
+  :root{
+    --bg:#0f1720; --panel:#161f2b; --panel2:#1c2836; --border:#26333f;
+    --text:#e7edf3; --sub:#8fa1b3; --accent:#3d8bfd; --green:#26c281; --red:#f05454;
+    --yellow:#e8b93f; --purple:#b98af0;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;background:var(--bg);color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,"Hiragino Sans","Yu Gothic",sans-serif;
+    -webkit-tap-highlight-color:transparent; overscroll-behavior:none;}
+  #app{max-width:900px;margin:0 auto;padding-bottom:env(safe-area-inset-bottom);}
+
+  header{position:sticky;top:0;z-index:20;background:var(--bg);
+    padding:calc(env(safe-area-inset-top) + 10px) 12px 8px;
+    display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--border);}
+  header .title{font-size:15px;font-weight:600;color:var(--sub);}
+  header .price-row{display:flex;align-items:baseline;gap:8px;}
+  header .price{font-size:26px;font-weight:700;font-variant-numeric:tabular-nums;}
+  header .chg{font-size:13px;font-weight:600;}
+  header .chg.up{color:var(--green);} header .chg.down{color:var(--red);}
+  header button.icon-btn{background:none;border:none;color:var(--sub);font-size:20px;padding:6px;cursor:pointer;}
+
+  .tabs{display:flex;gap:6px;padding:8px 10px;overflow-x:auto;}
+  .tabs button, .chips button{white-space:nowrap;background:var(--panel);border:1px solid var(--border);
+    color:var(--sub);border-radius:8px;padding:6px 12px;font-size:13px;cursor:pointer;}
+  .tabs button.active{background:var(--accent);color:#fff;border-color:var(--accent);}
+  .chips{display:flex;gap:6px;padding:0 10px 8px;flex-wrap:wrap;}
+  .chips button.active{background:#274158;color:var(--text);border-color:var(--accent);}
+
+  #chart-wrap{position:relative;margin:0 10px;border:1px solid var(--border);border-radius:10px;overflow:hidden;background:var(--panel);}
+  #main-chart{width:100%;height:300px;}
+  #overlay-canvas{position:absolute;top:0;left:0;pointer-events:none;}
+  .subchart-label{position:absolute;top:4px;left:8px;font-size:11px;color:var(--sub);z-index:5;}
+  .sub-wrap{position:relative;margin:8px 10px 0;border:1px solid var(--border);border-radius:10px;overflow:hidden;background:var(--panel);}
+  #rsi-chart, #macd-chart{width:100%;height:110px;}
+
+  .status-line{display:flex;justify-content:space-between;padding:6px 12px;font-size:11px;color:var(--sub);}
+
+  section.card{margin:12px 10px;background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:12px;}
+  section.card h2{font-size:13px;margin:0 0 8px;color:var(--sub);font-weight:600;letter-spacing:.02em;}
+
+  .alert-row{display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--border);font-size:14px;}
+  .alert-row:last-child{border-bottom:none;}
+  .alert-row .meta{color:var(--sub);font-size:12px;}
+  .alert-row button{background:none;border:none;color:var(--red);font-size:13px;cursor:pointer;}
+  .alert-form{display:flex;gap:6px;margin-top:8px;flex-wrap:wrap;}
+  .alert-form input, .alert-form select{background:var(--panel2);border:1px solid var(--border);color:var(--text);
+    border-radius:8px;padding:8px;font-size:14px;}
+  .alert-form input[type=number]{width:110px;}
+  .alert-form button{background:var(--accent);color:#fff;border:none;border-radius:8px;padding:8px 14px;font-size:14px;cursor:pointer;}
+
+  .legend{display:flex;flex-wrap:wrap;gap:10px;font-size:11px;color:var(--sub);margin-top:6px;}
+  .legend span{display:inline-flex;align-items:center;gap:4px;}
+  .legend i{width:10px;height:10px;border-radius:2px;display:inline-block;}
+
+  #toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:#1c2836;
+    border:1px solid var(--accent);color:var(--text);padding:10px 16px;border-radius:10px;
+    font-size:13px;z-index:100;display:none;max-width:90vw;box-shadow:0 6px 20px rgba(0,0,0,.4);}
+
+  .modal-backdrop{position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:50;display:none;}
+  .modal-backdrop.open{display:block;}
+  .modal{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);width:min(420px,92vw);
+    background:var(--panel);border:1px solid var(--border);border-radius:14px;padding:18px;z-index:51;
+    max-height:86vh;overflow:auto;}
+  .modal h3{margin:0 0 12px;font-size:16px;}
+  .field{margin-bottom:14px;}
+  .field label{display:block;font-size:12px;color:var(--sub);margin-bottom:5px;}
+  .field input[type=text], .field input[type=password], .field input[type=number], .field select{
+    width:100%;background:var(--panel2);border:1px solid var(--border);color:var(--text);
+    border-radius:8px;padding:9px;font-size:14px;}
+  .field .hint{font-size:11px;color:var(--sub);margin-top:4px;}
+  .field .hint a{color:var(--accent);}
+  .modal-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:6px;}
+  .modal-actions button{border:none;border-radius:8px;padding:9px 16px;font-size:14px;cursor:pointer;}
+  .btn-primary{background:var(--accent);color:#fff;}
+  .btn-ghost{background:var(--panel2);color:var(--text);}
+  .row2{display:flex;gap:10px;} .row2 > *{flex:1;}
+  .empty{color:var(--sub);font-size:13px;padding:8px 0;}
+</style>
+</head>
+<body>
+<div id="app">
+  <header>
+    <div>
+      <div class="title">USD/JPY</div>
+      <div class="price-row">
+        <span class="price" id="price-val">--.---</span>
+        <span class="chg" id="price-chg"></span>
+      </div>
+    </div>
+    <button class="icon-btn" id="settings-btn" title="設定">⚙️</button>
+  </header>
+
+  <div class="tabs" id="tf-tabs"></div>
+  <div class="chips" id="overlay-chips"></div>
+
+  <div id="chart-wrap">
+    <div id="main-chart"></div>
+    <canvas id="overlay-canvas"></canvas>
+  </div>
+  <div class="legend" id="legend"></div>
+
+  <div class="sub-wrap"><div class="subchart-label">RSI(14)</div><div id="rsi-chart"></div></div>
+  <div class="sub-wrap"><div class="subchart-label">MACD(12,26,9)</div><div id="macd-chart"></div></div>
+
+  <div class="status-line">
+    <span id="status-left">未接続</span>
+    <span id="status-right"></span>
+  </div>
+
+  <section class="card">
+    <h2>アラート</h2>
+    <div id="alert-list"><div class="empty">アラートはまだありません</div></div>
+    <div class="alert-form">
+      <select id="alert-dir"><option value="above">↑ 以上で通知</option><option value="below">↓ 以下で通知</option></select>
+      <input type="number" id="alert-price" step="0.001" placeholder="例: 150.500">
+      <button id="alert-add">追加</button>
+    </div>
+  </section>
+</div>
+
+<div id="toast"></div>
+
+<div class="modal-backdrop" id="settings-backdrop">
+  <div class="modal">
+    <h3>設定</h3>
+    <div class="field">
+      <label>Twelve Data APIキー</label>
+      <input type="password" id="api-key-input" placeholder="APIキーを入力">
+      <div class="hint">未取得の場合は <a href="https://twelvedata.com/pricing" target="_blank" rel="noopener">twelvedata.com</a> で無料登録すると取得できます(クレジットカード不要)。キーはこの端末のブラウザ内にのみ保存され、どこにも送信されません。</div>
+    </div>
+    <div class="field">
+      <label>自動更新間隔</label>
+      <select id="refresh-interval">
+        <option value="20000">20秒</option>
+        <option value="30000" selected>30秒</option>
+        <option value="60000">60秒</option>
+        <option value="120000">2分</option>
+      </select>
+      <div class="hint">無料プランはレート制限(8回/分, 800回/日)があるため短くしすぎないでください。</div>
+    </div>
+    <div class="field">
+      <label>水平線として残す本数</label>
+      <input type="number" id="sr-count" min="2" max="10" value="5">
+    </div>
+    <div class="field">
+      <label>水平線の許容誤差 (%)</label>
+      <input type="number" id="sr-tolerance" min="0.02" max="1" step="0.01" value="0.12">
+    </div>
+    <div class="modal-actions">
+      <button class="btn-ghost" id="settings-cancel">閉じる</button>
+      <button class="btn-primary" id="settings-save">保存して再読込</button>
+    </div>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
+<script>
+"use strict";
+
+/* ============================== 設定・状態 ============================== */
+const SYMBOL = "USD/JPY";
+const LS = {
+  apiKey: "usdjpy_api_key",
+  refreshMs: "usdjpy_refresh_ms",
+  srCount: "usdjpy_sr_count",
+  srTolerance: "usdjpy_sr_tolerance",
+  alerts: "usdjpy_alerts",
+  overlays: "usdjpy_overlays",
+  timeframe: "usdjpy_timeframe",
+};
+
+const TIMEFRAMES = [
+  { key: "1min", label: "1分" },
+  { key: "5min", label: "5分" },
+  { key: "15min", label: "15分" },
+  { key: "1h", label: "1時間" },
+  { key: "4h", label: "4時間" },
+  { key: "1day", label: "日足" },
+];
+
+const state = {
+  timeframe: localStorage.getItem(LS.timeframe) || "15min",
+  candles: [],           // {time, open, high, low, close}
+  overlays: loadJSON(LS.overlays, { ma: true, bb: false, sr: true, trend: true, range: true, channel: true }),
+  alerts: loadJSON(LS.alerts, []),
+  lastPrice: null,
+  prevClose: null,
+  refreshTimer: null,
+};
+
+function loadJSON(key, fallback) {
+  try { const v = localStorage.getItem(key); return v ? JSON.parse(v) : fallback; }
+  catch (e) { return fallback; }
+}
+function saveJSON(key, val) { localStorage.setItem(key, JSON.stringify(val)); }
+
+function getApiKey() { return localStorage.getItem(LS.apiKey) || ""; }
+function getRefreshMs() { return parseInt(localStorage.getItem(LS.refreshMs) || "30000", 10); }
+function getSrCount() { return parseInt(localStorage.getItem(LS.srCount) || "5", 10); }
+function getSrTolerancePct() { return parseFloat(localStorage.getItem(LS.srTolerance) || "0.12"); }
+
+/* ============================== テクニカル指標計算 ============================== */
+function sma(values, period) {
+  const out = new Array(values.length).fill(null);
+  let sum = 0;
+  for (let i = 0; i < values.length; i++) {
+    sum += values[i];
+    if (i >= period) sum -= values[i - period];
+    if (i >= period - 1) out[i] = sum / period;
+  }
+  return out;
+}
+function ema(values, period) {
+  const out = new Array(values.length).fill(null);
+  const k = 2 / (period + 1);
+  let prev = null;
+  for (let i = 0; i < values.length; i++) {
+    if (values[i] == null) continue;
+    if (prev == null) {
+      // 最初はSMAで初期化
+      if (i >= period - 1) {
+        let s = 0; for (let j = i - period + 1; j <= i; j++) s += values[j];
+        prev = s / period;
+        out[i] = prev;
+      }
+    } else {
+      prev = values[i] * k + prev * (1 - k);
+      out[i] = prev;
+    }
+  }
+  return out;
+}
+function stddev(values, period) {
+  const out = new Array(values.length).fill(null);
+  for (let i = period - 1; i < values.length; i++) {
+    let s = 0; for (let j = i - period + 1; j <= i; j++) s += values[j];
+    const mean = s / period;
+    let sq = 0; for (let j = i - period + 1; j <= i; j++) sq += (values[j] - mean) ** 2;
+    out[i] = Math.sqrt(sq / period);
+  }
+  return out;
+}
+function rsi(closes, period = 14) {
+  const out = new Array(closes.length).fill(null);
+  let gainSum = 0, lossSum = 0;
+  for (let i = 1; i < closes.length; i++) {
+    const diff = closes[i] - closes[i - 1];
+    const gain = Math.max(diff, 0), loss = Math.max(-diff, 0);
+    if (i <= period) {
+      gainSum += gain; lossSum += loss;
+      if (i === period) {
+        let avgG = gainSum / period, avgL = lossSum / period;
+        out[i] = avgL === 0 ? 100 : 100 - 100 / (1 + avgG / avgL);
+        gainSum = avgG; lossSum = avgL; // gainSum/lossSumを「平均」として使い回す
+      }
+    } else {
+      gainSum = (gainSum * (period - 1) + gain) / period;
+      lossSum = (lossSum * (period - 1) + loss) / period;
+      out[i] = lossSum === 0 ? 100 : 100 - 100 / (1 + gainSum / lossSum);
+    }
+  }
+  return out;
+}
+function macd(closes, fast = 12, slow = 26, signalP = 9) {
+  const emaFast = ema(closes, fast);
+  const emaSlow = ema(closes, slow);
+  const macdLine = closes.map((_, i) => (emaFast[i] != null && emaSlow[i] != null) ? emaFast[i] - emaSlow[i] : null);
+  const signalLine = ema(macdLine.map(v => v == null ? null : v), signalP);
+  const hist = closes.map((_, i) => (macdLine[i] != null && signalLine[i] != null) ? macdLine[i] - signalLine[i] : null);
+  return { macdLine, signalLine, hist };
+}
+
+/* ============================== 自動ライン検出 ============================== */
+// スイングハイ/ローの検出(左右N本より高い/低い)
+function findPivots(candles, leftBars = 5, rightBars = 5) {
+  const pivots = [];
+  for (let i = leftBars; i < candles.length - rightBars; i++) {
+    let isHigh = true, isLow = true;
+    for (let j = i - leftBars; j <= i + rightBars; j++) {
+      if (j === i) continue;
+      if (candles[j].high >= candles[i].high) isHigh = false;
+      if (candles[j].low <= candles[i].low) isLow = false;
+    }
+    if (isHigh) pivots.push({ type: "high", index: i, time: candles[i].time, price: candles[i].high });
+    if (isLow) pivots.push({ type: "low", index: i, time: candles[i].time, price: candles[i].low });
+  }
+  return pivots;
+}
+
+// 水平サポート/レジスタンス: ピボットを価格でクラスタリングし、タッチ回数+直近性でスコア付け
+function detectHorizontalLevels(pivots, candles, { tolerancePct = 0.12, keep = 5, minTouches = 2 } = {}) {
+  if (!candles.length) return [];
+  const lastPrice = candles[candles.length - 1].close;
+  const tol = lastPrice * (tolerancePct / 100);
+  const levels = []; // {price, touches:[{index}], }
+  for (const p of pivots) {
+    let level = levels.find(l => Math.abs(l.price - p.price) <= tol);
+    if (level) {
+      level.touches.push(p);
+      // 価格は加重平均で更新
+      level.price = level.touches.reduce((s, t) => s + t.price, 0) / level.touches.length;
+    } else {
+      levels.push({ price: p.price, touches: [p] });
+    }
+  }
+  const lastIndex = candles.length - 1;
+  for (const l of levels) {
+    l.score = l.touches.reduce((s, t) => s + Math.exp(-(lastIndex - t.index) / 80), 0) + l.touches.length * 0.3;
+  }
+  return levels
+    .filter(l => l.touches.length >= minTouches)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, keep);
+}
+
+// 凸包(モノトーンチェーン)によるトレンドライン検出
+function convexHull(points, upper) {
+  // points: [{x,y}], xでソート済み前提
+  const pts = [...points].sort((a, b) => a.x - b.x || a.y - b.y);
+  if (pts.length < 2) return pts;
+  const cross = (o, a, b) => (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
+  const hull = [];
+  for (const p of pts) {
+    while (hull.length >= 2) {
+      const c = cross(hull[hull.length - 2], hull[hull.length - 1], p);
+      // upper=true: 上側包絡線(高値の上限=レジスタンス) → 右回り(cross<=0)を保つ
+      if ((upper && c <= 0) || (!upper && c >= 0)) hull.pop();
+      else break;
+    }
+    hull.push(p);
+  }
+  return hull;
+}
+
+// 直近のトレンドライン(サポート/レジスタンス)を検出。戻り値: {p1:{time,price}, p2:{time,price}, kind:'support'|'resistance'} の配列
+function detectTrendlines(candles, pivots, lookback = 150) {
+  const startIdx = Math.max(0, candles.length - lookback);
+  const highs = pivots.filter(p => p.type === "high" && p.index >= startIdx)
+    .map(p => ({ x: p.index, y: p.price, time: p.time }));
+  const lows = pivots.filter(p => p.type === "low" && p.index >= startIdx)
+    .map(p => ({ x: p.index, y: p.price, time: p.time }));
+
+  const lines = [];
+  if (highs.length >= 2) {
+    const hull = convexHull(highs, true); // 上側包絡線 = レジスタンス
+    if (hull.length >= 2) {
+      const a = hull[hull.length - 2], b = hull[hull.length - 1];
+      lines.push({ p1: a, p2: b, kind: "resistance" });
+    }
+  }
+  if (lows.length >= 2) {
+    const hull = convexHull(lows, false); // 下側包絡線 = サポート
+    if (hull.length >= 2) {
+      const a = hull[hull.length - 2], b = hull[hull.length - 1];
+      lines.push({ p1: a, p2: b, kind: "support" });
+    }
+  }
+  return lines;
+}
+
+// チャネル: サポート/レジスタンスの傾きがほぼ平行なら採用
+function detectChannel(trendlines) {
+  const res = trendlines.find(l => l.kind === "resistance");
+  const sup = trendlines.find(l => l.kind === "support");
+  if (!res || !sup) return null;
+  const slope = (l) => (l.p2.y - l.p1.y) / Math.max(1, (l.p2.x - l.p1.x));
+  const sRes = slope(res), sSup = slope(sup);
+  const avgAbs = (Math.abs(sRes) + Math.abs(sSup)) / 2;
+  if (avgAbs === 0) return null;
+  const diff = Math.abs(sRes - sSup) / avgAbs;
+  if (diff < 0.6 && Math.sign(sRes || 1) === Math.sign(sSup || 1)) {
+    return { upper: res, lower: sup };
+  }
+  return null;
+}
+
+// レンジ(もみ合い)検出: 直近の値幅が平均価格に対して小さい区間をまとめて抽出
+function detectRanges(candles, { window = 20, thresholdPct = 0.55, minLen = 15 } = {}) {
+  if (candles.length < window + 5) return [];
+  const flags = new Array(candles.length).fill(false);
+  for (let i = window; i < candles.length; i++) {
+    let hi = -Infinity, lo = Infinity, sum = 0;
+    for (let j = i - window; j < i; j++) {
+      hi = Math.max(hi, candles[j].high);
+      lo = Math.min(lo, candles[j].low);
+      sum += candles[j].close;
+    }
+    const avg = sum / window;
+    const pct = ((hi - lo) / avg) * 100;
+    if (pct < thresholdPct) flags[i] = true;
+  }
+  // 連続区間をまとめる
+  const ranges = [];
+  let start = null;
+  for (let i = 0; i <= flags.length; i++) {
+    if (i < flags.length && flags[i]) {
+      if (start === null) start = i;
+    } else {
+      if (start !== null) {
+        const end = i - 1;
+        if (end - start >= minLen) {
+          let hi = -Infinity, lo = Infinity;
+          for (let k = start; k <= end; k++) { hi = Math.max(hi, candles[k].high); lo = Math.min(lo, candles[k].low); }
+          ranges.push({ startIndex: start, endIndex: end, top: hi, bottom: lo,
+            startTime: candles[start].time, endTime: candles[end].time });
+        }
+        start = null;
+      }
+    }
+  }
+  return ranges.slice(-2); // 直近2件まで
+}
+
+/* ============================== データ取得 (Twelve Data) ============================== */
+async function fetchCandles(timeframe) {
+  const key = getApiKey();
+  if (!key) throw new Error("NO_API_KEY");
+  const url = `https://api.twelvedata.com/time_series?symbol=${encodeURIComponent(SYMBOL)}&interval=${timeframe}&outputsize=300&apikey=${encodeURIComponent(key)}`;
+  const res = await fetch(url);
+  const json = await res.json();
+  if (json.status === "error") throw new Error(json.message || "API_ERROR");
+  if (!json.values) throw new Error("NO_DATA");
+  const candles = json.values.map(v => ({
+    time: Math.floor(new Date(v.datetime.replace(" ", "T") + "Z").getTime() / 1000),
+    open: parseFloat(v.open), high: parseFloat(v.high), low: parseFloat(v.low), close: parseFloat(v.close),
+  })).reverse();
+  // 重複time防止(念のため)
+  const dedup = [];
+  const seen = new Set();
+  for (const c of candles) { if (!seen.has(c.time)) { seen.add(c.time); dedup.push(c); } }
+  return dedup;
+}
+
+async function fetchQuote() {
+  const key = getApiKey();
+  if (!key) throw new Error("NO_API_KEY");
+  const url = `https://api.twelvedata.com/quote?symbol=${encodeURIComponent(SYMBOL)}&apikey=${encodeURIComponent(key)}`;
+  const res = await fetch(url);
+  const json = await res.json();
+  if (json.status === "error") throw new Error(json.message || "API_ERROR");
+  return json;
+}
+
+/* ============================== チャート構築 ============================== */
+const chartOpts = {
+  layout: { background: { color: "transparent" }, textColor: "#8fa1b3", fontSize: 11 },
+  grid: { vertLines: { color: "#1e2a37" }, horzLines: { color: "#1e2a37" } },
+  rightPriceScale: { borderColor: "#26333f" },
+  timeScale: { borderColor: "#26333f", timeVisible: true, secondsVisible: false },
+  crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
+  handleScroll: true, handleScale: true,
+};
+
+const mainChart = LightweightCharts.createChart(document.getElementById("main-chart"), { ...chartOpts, height: 300 });
+const candleSeries = mainChart.addCandlestickSeries({
+  upColor: "#26c281", downColor: "#f05454", borderVisible: false,
+  wickUpColor: "#26c281", wickDownColor: "#f05454",
+});
+const maFastSeries = mainChart.addLineSeries({ color: "#e8b93f", lineWidth: 1, priceLineVisible: false, lastValueVisible: false });
+const maSlowSeries = mainChart.addLineSeries({ color: "#b98af0", lineWidth: 1, priceLineVisible: false, lastValueVisible: false });
+const bbUpperSeries = mainChart.addLineSeries({ color: "#3d8bfd", lineWidth: 1, priceLineVisible: false, lastValueVisible: false });
+const bbLowerSeries = mainChart.addLineSeries({ color: "#3d8bfd", lineWidth: 1, priceLineVisible: false, lastValueVisible: false });
+
+const rsiChart = LightweightCharts.createChart(document.getElementById("rsi-chart"), { ...chartOpts, height: 110 });
+const rsiSeries = rsiChart.addLineSeries({ color: "#e8b93f", lineWidth: 1.5, priceLineVisible: false, lastValueVisible: false });
+
+const macdChart = LightweightCharts.createChart(document.getElementById("macd-chart"), { ...chartOpts, height: 110 });
+const macdLineSeries = macdChart.addLineSeries({ color: "#3d8bfd", lineWidth: 1.5, priceLineVisible: false, lastValueVisible: false });
+const macdSignalSeries = macdChart.addLineSeries({ color: "#e8b93f", lineWidth: 1.5, priceLineVisible: false, lastValueVisible: false });
+const macdHistSeries = macdChart.addHistogramSeries({ priceLineVisible: false, lastValueVisible: false });
+
+// 3チャートの時間軸を同期
+let syncing = false;
+function syncTimeScales(source, targets) {
+  source.timeScale().subscribeVisibleLogicalRangeChange((range) => {
+    if (syncing || !range) return;
+    syncing = true;
+    targets.forEach(t => t.timeScale().setVisibleLogicalRange(range));
+    syncing = false;
+  });
+}
+syncTimeScales(mainChart, [rsiChart, macdChart]);
+syncTimeScales(rsiChart, [mainChart, macdChart]);
+syncTimeScales(macdChart, [mainChart, rsiChart]);
+
+let priceLineRefs = []; // 現在描画中のS/R price line
+
+let detected = { trendlines: [], channel: null, ranges: [] };
+
+function render() {
+  const candles = state.candles;
+  if (!candles.length) return;
+  candleSeries.setData(candles);
+
+  const closes = candles.map(c => c.close);
+
+  // MA
+  if (state.overlays.ma) {
+    const m20 = sma(closes, 20), m50 = sma(closes, 50);
+    maFastSeries.setData(candles.map((c, i) => m20[i] != null ? { time: c.time, value: m20[i] } : null).filter(Boolean));
+    maSlowSeries.setData(candles.map((c, i) => m50[i] != null ? { time: c.time, value: m50[i] } : null).filter(Boolean));
+  } else { maFastSeries.setData([]); maSlowSeries.setData([]); }
+
+  // Bollinger Bands
+  if (state.overlays.bb) {
+    const mid = sma(closes, 20), sd = stddev(closes, 20);
+    bbUpperSeries.setData(candles.map((c, i) => (mid[i] != null && sd[i] != null) ? { time: c.time, value: mid[i] + 2 * sd[i] } : null).filter(Boolean));
+    bbLowerSeries.setData(candles.map((c, i) => (mid[i] != null && sd[i] != null) ? { time: c.time, value: mid[i] - 2 * sd[i] } : null).filter(Boolean));
+  } else { bbUpperSeries.setData([]); bbLowerSeries.setData([]); }
+
+  // RSI
+  const rsiVals = rsi(closes, 14);
+  rsiSeries.setData(candles.map((c, i) => rsiVals[i] != null ? { time: c.time, value: rsiVals[i] } : null).filter(Boolean));
+
+  // MACD
+  const { macdLine, signalLine, hist } = macd(closes);
+  macdLineSeries.setData(candles.map((c, i) => macdLine[i] != null ? { time: c.time, value: macdLine[i] } : null).filter(Boolean));
+  macdSignalSeries.setData(candles.map((c, i) => signalLine[i] != null ? { time: c.time, value: signalLine[i] } : null).filter(Boolean));
+  macdHistSeries.setData(candles.map((c, i) => hist[i] != null ? { time: c.time, value: hist[i], color: hist[i] >= 0 ? "#26c28166" : "#f0545466" } : null).filter(Boolean));
+
+  // 自動ライン検出
+  const pivots = findPivots(candles, 5, 5);
+
+  // 水平S/R
+  priceLineRefs.forEach(ref => candleSeries.removePriceLine(ref));
+  priceLineRefs = [];
+  if (state.overlays.sr) {
+    const levels = detectHorizontalLevels(pivots, candles, { tolerancePct: getSrTolerancePct(), keep: getSrCount() });
+    for (const l of levels) {
+      const ref = candleSeries.createPriceLine({
+        price: l.price, color: "#8fa1b3", lineWidth: 1, lineStyle: LightweightCharts.LineStyle.Dashed,
+        axisLabelVisible: true, title: `S/R (${l.touches.length})`,
+      });
+      priceLineRefs.push(ref);
+    }
+  }
+
+  // トレンドライン・チャネル・レンジ(canvasオーバーレイ)
+  detected.trendlines = state.overlays.trend ? detectTrendlines(candles, pivots) : [];
+  detected.channel = state.overlays.channel ? detectChannel(detectTrendlines(candles, pivots)) : null;
+  detected.ranges = state.overlays.range ? detectRanges(candles) : [];
+
+  drawOverlay();
+  updateLegend();
+}
+
+/* ============================== キャンバスオーバーレイ描画 ============================== */
+const overlayCanvas = document.getElementById("overlay-canvas");
+const octx = overlayCanvas.getContext("2d");
+
+function resizeOverlay() {
+  const wrap = document.getElementById("chart-wrap");
+  const rect = wrap.getBoundingClientRect();
+  const dpr = window.devicePixelRatio || 1;
+  overlayCanvas.style.width = rect.width + "px";
+  overlayCanvas.style.height = "300px";
+  overlayCanvas.width = rect.width * dpr;
+  overlayCanvas.height = 300 * dpr;
+  octx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  drawOverlay();
+}
+
+function timeAt(index) {
+  return state.candles[Math.max(0, Math.min(state.candles.length - 1, index))].time;
+}
+
+function drawLineForSegment(p1, p2, color, extendToEnd) {
+  // p1,p2: {x:index, y:price}
+  const ts = mainChart.timeScale();
+  const t1 = timeAt(p1.x), t2 = timeAt(p2.x);
+  let x1 = ts.timeToCoordinate(t1);
+  let x2 = ts.timeToCoordinate(t2);
+  let y1 = candleSeries.priceToCoordinate(p1.y);
+  let y2 = candleSeries.priceToCoordinate(p2.y);
+  if (x1 == null || x2 == null || y1 == null || y2 == null) return;
+
+  if (extendToEnd) {
+    const lastIdx = state.candles.length - 1;
+    const tEnd = timeAt(lastIdx);
+    const xEnd = ts.timeToCoordinate(tEnd);
+    if (xEnd != null && x2 !== x1) {
+      const slope = (y2 - y1) / (x2 - x1);
+      const yEnd = y1 + slope * (xEnd - x1);
+      x2 = xEnd; y2 = yEnd;
+    }
+  }
+  octx.strokeStyle = color;
+  octx.lineWidth = 1.6;
+  octx.setLineDash([]);
+  octx.beginPath();
+  octx.moveTo(x1, y1);
+  octx.lineTo(x2, y2);
+  octx.stroke();
+}
+
+function drawOverlay() {
+  const rect = overlayCanvas.getBoundingClientRect();
+  octx.clearRect(0, 0, rect.width, 300);
+  if (!state.candles.length) return;
+
+  // レンジボックス
+  for (const r of detected.ranges) {
+    const ts = mainChart.timeScale();
+    const x1 = ts.timeToCoordinate(r.startTime);
+    const x2 = ts.timeToCoordinate(r.endTime);
+    const yTop = candleSeries.priceToCoordinate(r.top);
+    const yBot = candleSeries.priceToCoordinate(r.bottom);
+    if (x1 == null || x2 == null || yTop == null || yBot == null) continue;
+    octx.fillStyle = "rgba(232,185,63,0.08)";
+    octx.fillRect(Math.min(x1, x2), yTop, Math.abs(x2 - x1), yBot - yTop);
+    octx.strokeStyle = "rgba(232,185,63,0.6)";
+    octx.lineWidth = 1;
+    octx.strokeRect(Math.min(x1, x2), yTop, Math.abs(x2 - x1), yBot - yTop);
+  }
+
+  // チャネル優先、なければ個別トレンドライン
+  if (detected.channel) {
+    drawLineForSegment(detected.channel.upper.p1, detected.channel.upper.p2, "#f05454", true);
+    drawLineForSegment(detected.channel.lower.p1, detected.channel.lower.p2, "#26c281", true);
+  } else {
+    for (const l of detected.trendlines) {
+      const color = l.kind === "resistance" ? "#f05454" : "#26c281";
+      drawLineForSegment(l.p1, l.p2, color, true);
+    }
+  }
+}
+
+mainChart.timeScale().subscribeVisibleTimeRangeChange(() => drawOverlay());
+
+function resizeCharts() {
+  const w = document.getElementById("chart-wrap").clientWidth;
+  if (w > 0) {
+    mainChart.resize(w, 300);
+    rsiChart.resize(w, 110);
+    macdChart.resize(w, 110);
+  }
+  resizeOverlay();
+}
+window.addEventListener("resize", resizeCharts);
+
+function updateLegend() {
+  const el = document.getElementById("legend");
+  const items = [];
+  if (state.overlays.ma) items.push(`<span><i style="background:#e8b93f"></i>MA20</span><span><i style="background:#b98af0"></i>MA50</span>`);
+  if (state.overlays.bb) items.push(`<span><i style="background:#3d8bfd"></i>BB(20,2)</span>`);
+  if (state.overlays.sr) items.push(`<span><i style="background:#8fa1b3"></i>水平線</span>`);
+  if (detected.channel) items.push(`<span><i style="background:#f05454"></i>チャネル上</span><span><i style="background:#26c281"></i>チャネル下</span>`);
+  else if (state.overlays.trend) items.push(`<span><i style="background:#f05454"></i>レジスタンス</span><span><i style="background:#26c281"></i>サポート</span>`);
+  if (state.overlays.range) items.push(`<span><i style="background:#e8b93f"></i>レンジ</span>`);
+  el.innerHTML = items.join("");
+}
+
+/* ============================== 価格・データ更新 ============================== */
+function fmtPrice(p) { return p.toFixed(3); }
+
+function updatePriceHeader() {
+  const el = document.getElementById("price-val");
+  const chgEl = document.getElementById("price-chg");
+  if (state.lastPrice == null) return;
+  el.textContent = fmtPrice(state.lastPrice);
+  if (state.prevClose != null) {
+    const diff = state.lastPrice - state.prevClose;
+    const pct = (diff / state.prevClose) * 100;
+    chgEl.textContent = `${diff >= 0 ? "+" : ""}${diff.toFixed(3)} (${pct >= 0 ? "+" : ""}${pct.toFixed(2)}%)`;
+    chgEl.className = "chg " + (diff >= 0 ? "up" : "down");
+  }
+}
+
+async function loadAll(showStatus = true) {
+  const statusLeft = document.getElementById("status-left");
+  if (!getApiKey()) {
+    statusLeft.textContent = "APIキー未設定 - 右上の設定から登録してください";
+    return; // 未設定時に毎回モーダルを開かない(起動時のみopenSettingsを呼ぶ)
+  }
+  try {
+    if (showStatus) statusLeft.textContent = "更新中...";
+    const candles = await fetchCandles(state.timeframe);
+    state.candles = candles;
+    if (candles.length) {
+      state.lastPrice = candles[candles.length - 1].close;
+      state.prevClose = candles.length > 1 ? candles[candles.length - 2].close : null;
+    }
+    render();
+    resizeCharts();
+    updatePriceHeader();
+    checkAlerts();
+    statusLeft.textContent = "接続中";
+    document.getElementById("status-right").textContent = "最終更新: " + new Date().toLocaleTimeString("ja-JP");
+  } catch (e) {
+    console.error(e);
+    if (e.message === "NO_API_KEY") { statusLeft.textContent = "APIキー未設定"; }
+    else statusLeft.textContent = "取得エラー: " + e.message;
+  }
+}
+
+function scheduleRefresh() {
+  if (state.refreshTimer) clearInterval(state.refreshTimer);
+  state.refreshTimer = setInterval(() => loadAll(false), getRefreshMs());
+}
+
+/* ============================== アラート ============================== */
+function renderAlertList() {
+  const wrap = document.getElementById("alert-list");
+  if (!state.alerts.length) { wrap.innerHTML = `<div class="empty">アラートはまだありません</div>`; return; }
+  wrap.innerHTML = state.alerts.map((a, i) => `
+    <div class="alert-row">
+      <div>${a.dir === "above" ? "↑" : "↓"} ${fmtPrice(a.price)} ${a.fired ? "(発火済み)" : ""}</div>
+      <div class="meta"><button data-idx="${i}" class="del-alert">削除</button></div>
+    </div>`).join("");
+  wrap.querySelectorAll(".del-alert").forEach(btn => {
+    btn.addEventListener("click", () => {
+      state.alerts.splice(parseInt(btn.dataset.idx, 10), 1);
+      saveJSON(LS.alerts, state.alerts);
+      renderAlertList();
+    });
+  });
+}
+
+function checkAlerts() {
+  if (state.lastPrice == null) return;
+  let changed = false;
+  for (const a of state.alerts) {
+    if (a.fired) continue;
+    const hit = a.dir === "above" ? state.lastPrice >= a.price : state.lastPrice <= a.price;
+    if (hit) {
+      a.fired = true;
+      changed = true;
+      fireAlert(a);
+    }
+  }
+  if (changed) saveJSON(LS.alerts, state.alerts);
+  renderAlertList();
+}
+
+function fireAlert(a) {
+  const msg = `USD/JPY が ${fmtPrice(a.price)} を${a.dir === "above" ? "上回り" : "下回り"}ました (現在値 ${fmtPrice(state.lastPrice)})`;
+  showToast(msg);
+  try {
+    if ("Notification" in window && Notification.permission === "granted") {
+      new Notification("USDJPY アラート", { body: msg, icon: "icons/icon-192.png" });
+    }
+  } catch (e) { /* 通知非対応環境は無視 */ }
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const osc = ctx.createOscillator();
+    osc.frequency.value = 880;
+    osc.connect(ctx.destination);
+    osc.start(); setTimeout(() => { osc.stop(); ctx.close(); }, 220);
+  } catch (e) { /* 音再生非対応は無視 */ }
+}
+
+let toastTimer = null;
+function showToast(msg) {
+  const t = document.getElementById("toast");
+  t.textContent = msg;
+  t.style.display = "block";
+  if (toastTimer) clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { t.style.display = "none"; }, 4500);
+}
+
+document.getElementById("alert-add").addEventListener("click", () => {
+  const priceInput = document.getElementById("alert-price");
+  const dir = document.getElementById("alert-dir").value;
+  const price = parseFloat(priceInput.value);
+  if (!price || price <= 0) { showToast("価格を入力してください"); return; }
+  state.alerts.push({ price, dir, fired: false, createdAt: Date.now() });
+  saveJSON(LS.alerts, state.alerts);
+  priceInput.value = "";
+  renderAlertList();
+  if ("Notification" in window && Notification.permission === "default") {
+    Notification.requestPermission();
+  }
+});
+
+/* ============================== UI: タブ・チップ・設定 ============================== */
+function buildTabs() {
+  const wrap = document.getElementById("tf-tabs");
+  wrap.innerHTML = TIMEFRAMES.map(tf =>
+    `<button data-tf="${tf.key}" class="${tf.key === state.timeframe ? "active" : ""}">${tf.label}</button>`
+  ).join("");
+  wrap.querySelectorAll("button").forEach(btn => {
+    btn.addEventListener("click", () => {
+      state.timeframe = btn.dataset.tf;
+      localStorage.setItem(LS.timeframe, state.timeframe);
+      wrap.querySelectorAll("button").forEach(b => b.classList.toggle("active", b === btn));
+      loadAll();
+    });
+  });
+}
+
+const OVERLAY_DEFS = [
+  { key: "ma", label: "移動平均" },
+  { key: "bb", label: "ボリンジャー" },
+  { key: "sr", label: "水平線" },
+  { key: "trend", label: "トレンドライン" },
+  { key: "range", label: "レンジ" },
+  { key: "channel", label: "チャネル" },
+];
+function buildChips() {
+  const wrap = document.getElementById("overlay-chips");
+  wrap.innerHTML = OVERLAY_DEFS.map(o =>
+    `<button data-key="${o.key}" class="${state.overlays[o.key] ? "active" : ""}">${o.label}</button>`
+  ).join("");
+  wrap.querySelectorAll("button").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const key = btn.dataset.key;
+      state.overlays[key] = !state.overlays[key];
+      btn.classList.toggle("active", state.overlays[key]);
+      saveJSON(LS.overlays, state.overlays);
+      render();
+    });
+  });
+}
+
+function openSettings() {
+  document.getElementById("api-key-input").value = getApiKey();
+  document.getElementById("refresh-interval").value = String(getRefreshMs());
+  document.getElementById("sr-count").value = String(getSrCount());
+  document.getElementById("sr-tolerance").value = String(getSrTolerancePct());
+  document.getElementById("settings-backdrop").classList.add("open");
+}
+function closeSettings() { document.getElementById("settings-backdrop").classList.remove("open"); }
+
+document.getElementById("settings-btn").addEventListener("click", openSettings);
+document.getElementById("settings-cancel").addEventListener("click", closeSettings);
+document.getElementById("settings-backdrop").addEventListener("click", (e) => { if (e.target.id === "settings-backdrop") closeSettings(); });
+document.getElementById("settings-save").addEventListener("click", () => {
+  const key = document.getElementById("api-key-input").value.trim();
+  localStorage.setItem(LS.apiKey, key);
+  localStorage.setItem(LS.refreshMs, document.getElementById("refresh-interval").value);
+  localStorage.setItem(LS.srCount, document.getElementById("sr-count").value);
+  localStorage.setItem(LS.srTolerance, document.getElementById("sr-tolerance").value);
+  closeSettings();
+  loadAll();
+  scheduleRefresh();
+});
+
+/* ============================== 起動 ============================== */
+buildTabs();
+buildChips();
+renderAlertList();
+resizeCharts();
+if (!getApiKey()) { openSettings(); }
+loadAll();
+scheduleRefresh();
+
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("sw.js").catch(() => {});
+  });
+}
+</script>
+</body>
+</html>
