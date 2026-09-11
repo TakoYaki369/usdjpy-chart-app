@@ -676,10 +676,42 @@ let priceLineRefs = []; // 現在描画中のS/R price line
 
 let detected = { trendlines: [], channel: null, ranges: [] };
 
+// 現在のズーム(表示本数)を常に追跡しておく。setData()直後にgetVisibleLogicalRange()を
+// 同期的に読むと、内部の再レイアウトとの競合で1フレーム古い値が返ることがあるため、
+// チャート自身が発火するイベントから随時拾って保持する方が確実。
+let lastVisibleSpan = 80;
+mainChart.timeScale().subscribeVisibleLogicalRangeChange((range) => {
+  if (range) lastVisibleSpan = Math.max(10, range.to - range.from);
+});
+
+// 更新のたびに最新足が画面右端に来るようスクロールする。
+// 現在のズーム(表示本数)は維持したまま、右端の位置だけ最新足+余白に合わせて調整する
+// (このLightweight ChartsのバージョンではscrollToRealTime()が効かないケースがあったため、
+//  setVisibleLogicalRangeで明示的に位置を計算して合わせている)。
+function scrollMainChartToLatest() {
+  const candles = state.candles;
+  if (!candles.length) return;
+  const lastIndex = candles.length - 1;
+  const rightMargin = 2; // 最新足が軸ぎりぎりに張り付かないよう少し余白を持たせる
+  const target = { from: lastIndex + rightMargin - lastVisibleSpan, to: lastIndex + rightMargin };
+  // mainChartの変更だけではRSI/MACDへのイベント同期(syncTimeScales)が発火しないことが
+  // あったため、3チャートとも直接設定する。ただしそのまま3つ設定すると各チャートの
+  // subscribeVisibleLogicalRangeChangeが互いを呼び合ってズレる(ピンポン)ので、
+  // 同期用の`syncing`フラグを立てて既存の相互同期を一時的に抑止する。
+  syncing = true;
+  mainChart.timeScale().setVisibleLogicalRange(target);
+  rsiChart.timeScale().setVisibleLogicalRange(target);
+  macdChart.timeScale().setVisibleLogicalRange(target);
+  syncing = false;
+}
+
 function render() {
   const candles = state.candles;
   if (!candles.length) return;
   candleSeries.setData(candles);
+  // setData()直後は内部の再レイアウトとタイミングが競合して指定が無視されることがあるため、
+  // 1フレーム遅らせてから右端に合わせる
+  requestAnimationFrame(scrollMainChartToLatest);
 
   const closes = candles.map(c => c.close);
 
