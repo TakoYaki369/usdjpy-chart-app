@@ -32,6 +32,9 @@
   header .chg{font-size:13px;font-weight:600;}
   header .chg.up{color:var(--green);} header .chg.down{color:var(--red);}
   header button.icon-btn{background:none;border:none;color:var(--sub);font-size:20px;padding:6px;cursor:pointer;}
+  .header-right{display:flex;flex-direction:column;align-items:flex-end;gap:4px;}
+  .live-clock{font-size:15px;font-weight:600;font-variant-numeric:tabular-nums;color:var(--text);}
+  .live-clock .date{font-size:10px;font-weight:400;color:var(--sub);margin-right:5px;}
 
   .tabs{display:flex;gap:6px;padding:8px 10px;overflow-x:auto;}
   .tabs button, .chips button{white-space:nowrap;background:var(--panel);border:1px solid var(--border);
@@ -117,7 +120,10 @@
         <span class="chg" id="price-chg"></span>
       </div>
     </div>
-    <button class="icon-btn" id="settings-btn" title="設定">⚙️</button>
+    <div class="header-right">
+      <div class="live-clock"><span class="date" id="live-date"></span><span id="live-clock">--:--:--</span></div>
+      <button class="icon-btn" id="settings-btn" title="設定">⚙️</button>
+    </div>
   </header>
 
   <div class="tabs" id="tf-tabs"></div>
@@ -983,6 +989,15 @@ function updateTrendComment() {
   el.innerHTML = `<div class="headline ${c.kind}">${arrow} ${c.headline}</div><div class="detail">${c.detail}</div>`;
 }
 
+// unix秒(candle.time)を、現在時刻(ライブ時計と同じ基準)からの相対表現に変換する
+function formatRelativeTime(unixSeconds) {
+  const diff = Math.floor(Date.now() / 1000) - unixSeconds;
+  if (diff < 60) return "たった今";
+  if (diff < 3600) return `${Math.floor(diff / 60)}分前`;
+  if (diff < 86400) return `${Math.floor(diff / 3600)}時間前`;
+  return `${Math.floor(diff / 86400)}日前`;
+}
+
 /* ============================== エントリーシグナル(自動検出) ============================== */
 function renderSignalList() {
   const wrap = document.getElementById("signal-list");
@@ -990,8 +1005,18 @@ function renderSignalList() {
   wrap.innerHTML = state.entrySignals.slice(0, 15).map(s => `
     <div class="signal-row">
       <span class="badge ${s.dir}">${s.dir === "buy" ? "買い" : "売り"}</span>${s.label}
-      <div class="time">${new Date(s.time * 1000).toLocaleString("ja-JP")}</div>
+      <div class="time">${formatRelativeTime(s.time)} ・ ${new Date(s.time * 1000).toLocaleString("ja-JP")}</div>
     </div>`).join("");
+}
+
+// ヘッダーのライブ時計。1秒ごとに現在時刻を更新し、シグナル一覧の「◯分前」表示もこれと同じ
+// Date.now()基準で追従させるため、あわせて定期的に再描画する(通信は発生しない軽量な処理)。
+function updateClock() {
+  const now = new Date();
+  const clockEl = document.getElementById("live-clock");
+  const dateEl = document.getElementById("live-date");
+  if (clockEl) clockEl.textContent = now.toLocaleTimeString("ja-JP", { hour12: false });
+  if (dateEl) dateEl.textContent = now.toLocaleDateString("ja-JP", { month: "numeric", day: "numeric", weekday: "short" });
 }
 
 function runEntrySignalDetection() {
@@ -1116,6 +1141,9 @@ renderAlertList();
 renderSignalList();
 document.getElementById("signal-notify-toggle").checked = getSignalNotify();
 resizeCharts();
+updateClock();
+setInterval(updateClock, 1000);              // ヘッダーのライブ時計
+setInterval(renderSignalList, 30000);         // シグナル一覧の「◯分前」表示をライブ時計と同じ基準で追従させる
 if (!getApiKey()) { openSettings(); }
 loadAll().then(() => refreshPriceOnly());
 scheduleRefresh();
