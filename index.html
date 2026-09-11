@@ -40,6 +40,13 @@
   .chips{display:flex;gap:6px;padding:0 10px 8px;flex-wrap:wrap;}
   .chips button.active{background:#274158;color:var(--text);border-color:var(--accent);}
 
+  .trend-comment{margin:0 10px 10px;background:var(--panel);border:1px solid var(--border);border-radius:10px;
+    padding:10px 12px;font-size:13px;line-height:1.6;}
+  .trend-comment .headline{font-size:14px;font-weight:700;margin-bottom:3px;display:flex;align-items:center;gap:6px;}
+  .trend-comment .headline.up{color:var(--green);} .trend-comment .headline.down{color:var(--red);}
+  .trend-comment .headline.flat{color:var(--yellow);}
+  .trend-comment .detail{color:var(--sub);font-size:12px;}
+
   #chart-wrap{position:relative;margin:0 10px;border:1px solid var(--border);border-radius:10px;overflow:hidden;background:var(--panel);}
   #main-chart{width:100%;height:300px;}
   #overlay-canvas{position:absolute;top:0;left:0;pointer-events:none;}
@@ -56,6 +63,15 @@
   .alert-row:last-child{border-bottom:none;}
   .alert-row .meta{color:var(--sub);font-size:12px;}
   .alert-row button{background:none;border:none;color:var(--red);font-size:13px;cursor:pointer;}
+
+  .signal-row{padding:8px 0;border-bottom:1px solid var(--border);font-size:13px;}
+  .signal-row:last-child{border-bottom:none;}
+  .signal-row .badge{display:inline-block;font-size:10px;font-weight:700;padding:2px 6px;border-radius:5px;margin-right:6px;}
+  .signal-row .badge.buy{background:rgba(38,194,129,.18);color:var(--green);}
+  .signal-row .badge.sell{background:rgba(240,84,84,.18);color:var(--red);}
+  .signal-row .time{color:var(--sub);font-size:11px;margin-top:2px;}
+  .signal-toggle{display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;font-size:12px;color:var(--sub);}
+  .signal-toggle label{display:flex;align-items:center;gap:6px;cursor:pointer;}
   .alert-form{display:flex;gap:6px;margin-top:8px;flex-wrap:wrap;}
   .alert-form input, .alert-form select{background:var(--panel2);border:1px solid var(--border);color:var(--text);
     border-radius:8px;padding:8px;font-size:14px;}
@@ -106,6 +122,7 @@
 
   <div class="tabs" id="tf-tabs"></div>
   <div class="chips" id="overlay-chips"></div>
+  <div class="trend-comment" id="trend-comment"><div class="detail">データ取得後にトレンド分析を表示します…</div></div>
 
   <div id="chart-wrap">
     <div id="main-chart"></div>
@@ -120,6 +137,17 @@
     <span id="status-left">未接続</span>
     <span id="status-right"></span>
   </div>
+
+  <section class="card">
+    <h2>エントリーシグナル(自動検出)</h2>
+    <div class="signal-toggle">
+      <label><input type="checkbox" id="signal-notify-toggle"> シグナル発生時に通知する</label>
+    </div>
+    <div id="signal-list"><div class="empty">まだシグナルはありません</div></div>
+    <div class="detail" style="color:var(--sub);font-size:11px;margin-top:6px;">
+      検出中の水平線・トレンドライン・チャネル・レンジの境界に価格が接近し、反発/反落を示すローソク足(または明確なブレイク)が出た場合に表示します。あくまで過去のパターンに基づく参考シグナルで、エントリーを保証するものではありません。
+    </div>
+  </section>
 
   <section class="card">
     <h2>アラート</h2>
@@ -181,6 +209,9 @@ const LS = {
   alerts: "usdjpy_alerts",
   overlays: "usdjpy_overlays",
   timeframe: "usdjpy_timeframe",
+  entrySignals: "usdjpy_entry_signals",
+  notifiedSignalKeys: "usdjpy_notified_signal_keys",
+  signalNotify: "usdjpy_signal_notify",
 };
 
 const TIMEFRAMES = [
@@ -197,6 +228,8 @@ const state = {
   candles: [],           // {time, open, high, low, close}
   overlays: loadJSON(LS.overlays, { ma: true, bb: false, sr: true, trend: true, range: true, channel: true }),
   alerts: loadJSON(LS.alerts, []),
+  entrySignals: loadJSON(LS.entrySignals, []),       // 表示用: 直近検出したシグナルの履歴(新しい順)
+  notifiedSignalKeys: loadJSON(LS.notifiedSignalKeys, []), // 通知済みシグナルの重複発火防止キー
   lastPrice: null,
   prevClose: null,
   refreshTimer: null,
@@ -212,6 +245,7 @@ function getApiKey() { return localStorage.getItem(LS.apiKey) || ""; }
 function getRefreshMs() { return parseInt(localStorage.getItem(LS.refreshMs) || "30000", 10); }
 function getSrCount() { return parseInt(localStorage.getItem(LS.srCount) || "5", 10); }
 function getSrTolerancePct() { return parseFloat(localStorage.getItem(LS.srTolerance) || "0.12"); }
+function getSignalNotify() { return localStorage.getItem(LS.signalNotify) !== "0"; } // 既定ON
 
 /* ============================== テクニカル指標計算 ============================== */
 function sma(values, period) {
@@ -425,6 +459,125 @@ function detectRanges(candles, { window = 20, thresholdPct = 0.55, minLen = 15 }
   return ranges.slice(-2); // 直近2件まで
 }
 
+// ラインの指定インデックス位置での価格を線形補間/延長で求める(トレンドライン・チャネル境界共通)
+function lineValueAt(line, index) {
+  const { p1, p2 } = line;
+  if (p2.x === p1.x) return null;
+  const slope = (p2.y - p1.y) / (p2.x - p1.x);
+  return p1.y + slope * (index - p1.x);
+}
+
+// 反発(下ヒゲが長く陽線で引ける)・反落(上ヒゲが長く陰線で引ける)の簡易判定
+function isBullishReversal(c) {
+  const range = c.high - c.low;
+  if (range <= 0) return false;
+  const lowerWick = Math.min(c.open, c.close) - c.low;
+  return c.close > c.open && lowerWick / range > 0.35;
+}
+function isBearishReversal(c) {
+  const range = c.high - c.low;
+  if (range <= 0) return false;
+  const upperWick = c.high - Math.max(c.open, c.close);
+  return c.close < c.open && upperWick / range > 0.35;
+}
+
+// 検出済みの水平線・トレンドライン・チャネル・レンジの「境界」に価格が接近し、
+// 反発/反落ローソク足またはブレイクが出た場合をエントリーシグナル候補として返す。
+// あくまでルールベースの参考シグナルであり、エントリーを保証するものではない。
+function detectEntrySignals(candles, levels, trendlines, channel, ranges) {
+  if (candles.length < 3) return [];
+  const last = candles[candles.length - 1];
+  const lastIndex = candles.length - 1;
+  const tol = last.close * (getSrTolerancePct() / 100) * 1.5; // 水平線検出より少し広めの接近許容
+  const signals = [];
+
+  // 水平サポート/レジスタンスへのタッチ+反発/反落
+  for (const lvl of levels) {
+    if (Math.abs(last.low - lvl.price) <= tol && isBullishReversal(last) && last.close >= lvl.price) {
+      signals.push({ type: "sr_bounce", dir: "buy", time: last.time, price: lvl.price,
+        label: `水平サポート ${fmtPrice(lvl.price)} 付近で反発の買いシグナル` });
+    }
+    if (Math.abs(last.high - lvl.price) <= tol && isBearishReversal(last) && last.close <= lvl.price) {
+      signals.push({ type: "sr_reject", dir: "sell", time: last.time, price: lvl.price,
+        label: `水平レジスタンス ${fmtPrice(lvl.price)} 付近で反落の売りシグナル` });
+    }
+  }
+
+  // トレンドライン/チャネル境界へのタッチ+反発/反落(チャネルがあればチャネルを優先)
+  const lines = channel
+    ? [{ ...channel.lower, kind: "support" }, { ...channel.upper, kind: "resistance" }]
+    : trendlines;
+  for (const l of lines) {
+    const val = lineValueAt(l, lastIndex);
+    if (val == null) continue;
+    if (l.kind === "support" && Math.abs(last.low - val) <= tol && isBullishReversal(last)) {
+      signals.push({ type: "trend_bounce", dir: "buy", time: last.time, price: val,
+        label: `上昇トレンドライン付近(${fmtPrice(val)})で反発の買いシグナル` });
+    }
+    if (l.kind === "resistance" && Math.abs(last.high - val) <= tol && isBearishReversal(last)) {
+      signals.push({ type: "trend_reject", dir: "sell", time: last.time, price: val,
+        label: `下降トレンドライン付近(${fmtPrice(val)})で反落の売りシグナル` });
+    }
+  }
+
+  // レンジのブレイクアウト
+  for (const r of ranges) {
+    if (last.close > r.top + tol) {
+      signals.push({ type: "range_break_up", dir: "buy", time: last.time, price: r.top,
+        label: `レンジ上限 ${fmtPrice(r.top)} を上抜けブレイク` });
+    }
+    if (last.close < r.bottom - tol) {
+      signals.push({ type: "range_break_down", dir: "sell", time: last.time, price: r.bottom,
+        label: `レンジ下限 ${fmtPrice(r.bottom)} を下抜けブレイク` });
+    }
+  }
+
+  return signals;
+}
+
+// 現在のトレンド傾向を短い日本語コメントに要約する(MA・RSI・MACD・直近S/Rからのルールベース)
+function buildTrendComment(candles, levels) {
+  if (candles.length < 55) return null;
+  const closes = candles.map(c => c.close);
+  const last = candles.length - 1;
+  const m20 = sma(closes, 20), m50 = sma(closes, 50);
+  const price = closes[last];
+
+  let trendKind = "flat", trendLabel = "レンジ・方向感なし";
+  if (m20[last] != null && m50[last] != null && m20[last - 5] != null) {
+    const slope = m20[last] - m20[last - 5];
+    if (m20[last] > m50[last] && slope > 0) { trendKind = "up"; trendLabel = "上昇トレンド"; }
+    else if (m20[last] < m50[last] && slope < 0) { trendKind = "down"; trendLabel = "下降トレンド"; }
+  }
+
+  const rsiVals = rsi(closes, 14);
+  let rsiComment = "";
+  if (rsiVals[last] != null) {
+    const r = rsiVals[last];
+    rsiComment = r >= 70 ? `RSI ${r.toFixed(0)}(過熱感あり)` : r <= 30 ? `RSI ${r.toFixed(0)}(売られすぎ)` : `RSI ${r.toFixed(0)}(中立)`;
+  }
+
+  const { hist } = macd(closes);
+  let macdComment = "";
+  if (hist[last] != null && hist[last - 1] != null) {
+    if (hist[last] > 0) macdComment = hist[last] > hist[last - 1] ? "MACD上昇モメンタム拡大中" : "MACD上昇モメンタムは縮小中";
+    else macdComment = hist[last] < hist[last - 1] ? "MACD下降モメンタム拡大中" : "MACD下降モメンタムは縮小中";
+  }
+
+  let proximityComment = "";
+  if (levels.length) {
+    let nearest = null, minDist = Infinity;
+    for (const l of levels) { const d = Math.abs(l.price - price); if (d < minDist) { minDist = d; nearest = l; } }
+    if (nearest) {
+      const dir = nearest.price > price ? "レジスタンス" : "サポート";
+      proximityComment = `直近${dir} ${fmtPrice(nearest.price)}まで${minDist.toFixed(3)}円`;
+    }
+  }
+
+  const detail = [rsiComment, macdComment, proximityComment].filter(Boolean).join(" / ");
+  return { kind: trendKind, headline: trendLabel, detail };
+}
+
 /* ============================== データ取得 (Twelve Data) ============================== */
 async function fetchCandles(timeframe) {
   const key = getApiKey();
@@ -532,14 +685,23 @@ function render() {
   macdSignalSeries.setData(candles.map((c, i) => signalLine[i] != null ? { time: c.time, value: signalLine[i] } : null).filter(Boolean));
   macdHistSeries.setData(candles.map((c, i) => hist[i] != null ? { time: c.time, value: hist[i], color: hist[i] >= 0 ? "#26c28166" : "#f0545466" } : null).filter(Boolean));
 
-  // 自動ライン検出
+  // 自動ライン検出(表示トグルに関わらず常に計算する。表示ON/OFFは描画側だけで制御し、
+  // トレンド分析コメント/エントリーシグナル検出は非表示中の要素も含めて評価できるようにする)
   const pivots = findPivots(candles, 5, 5);
+  const levels = detectHorizontalLevels(pivots, candles, { tolerancePct: getSrTolerancePct(), keep: getSrCount() });
+  const trendlines = detectTrendlines(candles, pivots);
+  const channel = detectChannel(trendlines);
+  const ranges = detectRanges(candles);
 
-  // 水平S/R
+  detected.levels = levels;
+  detected.trendlines = trendlines;
+  detected.channel = channel;
+  detected.ranges = ranges;
+
+  // 水平S/R描画
   priceLineRefs.forEach(ref => candleSeries.removePriceLine(ref));
   priceLineRefs = [];
   if (state.overlays.sr) {
-    const levels = detectHorizontalLevels(pivots, candles, { tolerancePct: getSrTolerancePct(), keep: getSrCount() });
     for (const l of levels) {
       const ref = candleSeries.createPriceLine({
         price: l.price, color: "#8fa1b3", lineWidth: 1, lineStyle: LightweightCharts.LineStyle.Dashed,
@@ -549,13 +711,10 @@ function render() {
     }
   }
 
-  // トレンドライン・チャネル・レンジ(canvasオーバーレイ)
-  detected.trendlines = state.overlays.trend ? detectTrendlines(candles, pivots) : [];
-  detected.channel = state.overlays.channel ? detectChannel(detectTrendlines(candles, pivots)) : null;
-  detected.ranges = state.overlays.range ? detectRanges(candles) : [];
-
   drawOverlay();
   updateLegend();
+  updateTrendComment();
+  runEntrySignalDetection();
 }
 
 /* ============================== キャンバスオーバーレイ描画 ============================== */
@@ -613,7 +772,8 @@ function drawOverlay() {
   if (!state.candles.length) return;
 
   // レンジボックス
-  for (const r of detected.ranges) {
+  const rangesToDraw = state.overlays.range ? detected.ranges : [];
+  for (const r of rangesToDraw) {
     const ts = mainChart.timeScale();
     const x1 = ts.timeToCoordinate(r.startTime);
     const x2 = ts.timeToCoordinate(r.endTime);
@@ -627,11 +787,11 @@ function drawOverlay() {
     octx.strokeRect(Math.min(x1, x2), yTop, Math.abs(x2 - x1), yBot - yTop);
   }
 
-  // チャネル優先、なければ個別トレンドライン
-  if (detected.channel) {
+  // チャネル優先、なければ個別トレンドライン(どちらもオーバーレイのトグルに従う)
+  if (state.overlays.channel && detected.channel) {
     drawLineForSegment(detected.channel.upper.p1, detected.channel.upper.p2, "#f05454", true);
     drawLineForSegment(detected.channel.lower.p1, detected.channel.lower.p2, "#26c281", true);
-  } else {
+  } else if (state.overlays.trend) {
     for (const l of detected.trendlines) {
       const color = l.kind === "resistance" ? "#f05454" : "#26c281";
       drawLineForSegment(l.p1, l.p2, color, true);
@@ -658,7 +818,7 @@ function updateLegend() {
   if (state.overlays.ma) items.push(`<span><i style="background:#e8b93f"></i>MA20</span><span><i style="background:#b98af0"></i>MA50</span>`);
   if (state.overlays.bb) items.push(`<span><i style="background:#3d8bfd"></i>BB(20,2)</span>`);
   if (state.overlays.sr) items.push(`<span><i style="background:#8fa1b3"></i>水平線</span>`);
-  if (detected.channel) items.push(`<span><i style="background:#f05454"></i>チャネル上</span><span><i style="background:#26c281"></i>チャネル下</span>`);
+  if (state.overlays.channel && detected.channel) items.push(`<span><i style="background:#f05454"></i>チャネル上</span><span><i style="background:#26c281"></i>チャネル下</span>`);
   else if (state.overlays.trend) items.push(`<span><i style="background:#f05454"></i>レジスタンス</span><span><i style="background:#26c281"></i>サポート</span>`);
   if (state.overlays.range) items.push(`<span><i style="background:#e8b93f"></i>レンジ</span>`);
   el.innerHTML = items.join("");
@@ -746,12 +906,12 @@ function checkAlerts() {
   renderAlertList();
 }
 
-function fireAlert(a) {
-  const msg = `USD/JPY が ${fmtPrice(a.price)} を${a.dir === "above" ? "上回り" : "下回り"}ました (現在値 ${fmtPrice(state.lastPrice)})`;
+// トースト+ブラウザ通知+ビープ音をまとめて出す共通ヘルパー(価格アラート/エントリーシグナル共通)
+function notifyUser(title, msg) {
   showToast(msg);
   try {
     if ("Notification" in window && Notification.permission === "granted") {
-      new Notification("USDJPY アラート", { body: msg, icon: "icons/icon-192.png" });
+      new Notification(title, { body: msg, icon: "icons/icon-192.png" });
     }
   } catch (e) { /* 通知非対応環境は無視 */ }
   try {
@@ -763,6 +923,11 @@ function fireAlert(a) {
   } catch (e) { /* 音再生非対応は無視 */ }
 }
 
+function fireAlert(a) {
+  const msg = `USD/JPY が ${fmtPrice(a.price)} を${a.dir === "above" ? "上回り" : "下回り"}ました (現在値 ${fmtPrice(state.lastPrice)})`;
+  notifyUser("USDJPY アラート", msg);
+}
+
 let toastTimer = null;
 function showToast(msg) {
   const t = document.getElementById("toast");
@@ -771,6 +936,60 @@ function showToast(msg) {
   if (toastTimer) clearTimeout(toastTimer);
   toastTimer = setTimeout(() => { t.style.display = "none"; }, 4500);
 }
+
+/* ============================== トレンド分析コメント ============================== */
+function updateTrendComment() {
+  const el = document.getElementById("trend-comment");
+  const c = buildTrendComment(state.candles, detected.levels || []);
+  if (!c) { el.innerHTML = `<div class="detail">データが少なくトレンド分析を計算できません</div>`; return; }
+  const arrow = c.kind === "up" ? "▲" : c.kind === "down" ? "▼" : "■";
+  el.innerHTML = `<div class="headline ${c.kind}">${arrow} ${c.headline}</div><div class="detail">${c.detail}</div>`;
+}
+
+/* ============================== エントリーシグナル(自動検出) ============================== */
+function renderSignalList() {
+  const wrap = document.getElementById("signal-list");
+  if (!state.entrySignals.length) { wrap.innerHTML = `<div class="empty">まだシグナルはありません</div>`; return; }
+  wrap.innerHTML = state.entrySignals.slice(0, 15).map(s => `
+    <div class="signal-row">
+      <span class="badge ${s.dir}">${s.dir === "buy" ? "買い" : "売り"}</span>${s.label}
+      <div class="time">${new Date(s.time * 1000).toLocaleString("ja-JP")}</div>
+    </div>`).join("");
+}
+
+function runEntrySignalDetection() {
+  if (!state.candles.length) return;
+  const signals = detectEntrySignals(state.candles, detected.levels || [], detected.trendlines || [], detected.channel, detected.ranges || []);
+  if (!signals.length) return;
+
+  const notifyKeys = new Set(state.notifiedSignalKeys);
+  let changed = false;
+  for (const s of signals) {
+    const key = `${s.type}_${s.time}`;
+    if (notifyKeys.has(key)) continue; // 同じ足・同じ種別の重複発火を防止
+    notifyKeys.add(key);
+    state.entrySignals.unshift(s);
+    changed = true;
+    if (getSignalNotify()) {
+      notifyUser("USDJPY エントリーシグナル", s.label);
+    }
+  }
+  if (changed) {
+    state.entrySignals = state.entrySignals.slice(0, 30);
+    // 通知済みキーも際限なく増えないよう直近300件に制限
+    state.notifiedSignalKeys = Array.from(notifyKeys).slice(-300);
+    saveJSON(LS.entrySignals, state.entrySignals);
+    saveJSON(LS.notifiedSignalKeys, state.notifiedSignalKeys);
+    renderSignalList();
+  }
+}
+
+document.getElementById("signal-notify-toggle").addEventListener("change", (e) => {
+  localStorage.setItem(LS.signalNotify, e.target.checked ? "1" : "0");
+  if (e.target.checked && "Notification" in window && Notification.permission === "default") {
+    Notification.requestPermission();
+  }
+});
 
 document.getElementById("alert-add").addEventListener("click", () => {
   const priceInput = document.getElementById("alert-price");
@@ -853,6 +1072,8 @@ document.getElementById("settings-save").addEventListener("click", () => {
 buildTabs();
 buildChips();
 renderAlertList();
+renderSignalList();
+document.getElementById("signal-notify-toggle").checked = getSignalNotify();
 resizeCharts();
 if (!getApiKey()) { openSettings(); }
 loadAll();
