@@ -171,14 +171,24 @@
       <div class="hint">未取得の場合は <a href="https://twelvedata.com/pricing" target="_blank" rel="noopener">twelvedata.com</a> で無料登録すると取得できます(クレジットカード不要)。キーはこの端末のブラウザ内にのみ保存され、どこにも送信されません。</div>
     </div>
     <div class="field">
-      <label>自動更新間隔</label>
+      <label>価格の更新間隔(ヘッダーの現在値・価格アラート判定)</label>
+      <select id="price-refresh-interval">
+        <option value="15000" selected>15秒</option>
+        <option value="20000">20秒</option>
+        <option value="30000">30秒</option>
+        <option value="60000">60秒</option>
+      </select>
+      <div class="hint">チャートの時間足に関係なく、現在値だけを軽量に短い間隔で取りに行きます。体感の遅延を減らす一番の対策です。</div>
+    </div>
+    <div class="field">
+      <label>チャート・指標の更新間隔</label>
       <select id="refresh-interval">
         <option value="20000">20秒</option>
         <option value="30000" selected>30秒</option>
         <option value="60000">60秒</option>
         <option value="120000">2分</option>
       </select>
-      <div class="hint">無料プランはレート制限(8回/分, 800回/日)があるため短くしすぎないでください。</div>
+      <div class="hint">ローソク足・自動検出ライン・エントリーシグナルの再計算間隔です。無料プランはレート制限(8回/分, 800回/日)があるため、上の価格更新間隔と合計で8回/分を超えない組み合わせにしてください(既定の15秒+30秒なら合計6回/分で安全です)。</div>
     </div>
     <div class="field">
       <label>水平線として残す本数</label>
@@ -212,6 +222,7 @@ const LS = {
   entrySignals: "usdjpy_entry_signals",
   notifiedSignalKeys: "usdjpy_notified_signal_keys",
   signalNotify: "usdjpy_signal_notify",
+  priceRefreshMs: "usdjpy_price_refresh_ms",
 };
 
 const TIMEFRAMES = [
@@ -243,6 +254,7 @@ function saveJSON(key, val) { localStorage.setItem(key, JSON.stringify(val)); }
 
 function getApiKey() { return localStorage.getItem(LS.apiKey) || ""; }
 function getRefreshMs() { return parseInt(localStorage.getItem(LS.refreshMs) || "30000", 10); }
+function getPriceRefreshMs() { return parseInt(localStorage.getItem(LS.priceRefreshMs) || "15000", 10); }
 function getSrCount() { return parseInt(localStorage.getItem(LS.srCount) || "5", 10); }
 function getSrTolerancePct() { return parseFloat(localStorage.getItem(LS.srTolerance) || "0.12"); }
 function getSignalNotify() { return localStorage.getItem(LS.signalNotify) !== "0"; } // 既定ON
@@ -598,14 +610,18 @@ async function fetchCandles(timeframe) {
   return dedup;
 }
 
-async function fetchQuote() {
+// 軽量な現在値のみのエンドポイント。ヘッダーの表示価格をローソク足の時間足に縛られず
+// 短い間隔で更新するために使う(体感の遅延を減らす主な対策)。
+async function fetchPrice() {
   const key = getApiKey();
   if (!key) throw new Error("NO_API_KEY");
-  const url = `https://api.twelvedata.com/quote?symbol=${encodeURIComponent(SYMBOL)}&apikey=${encodeURIComponent(key)}`;
+  const url = `https://api.twelvedata.com/price?symbol=${encodeURIComponent(SYMBOL)}&apikey=${encodeURIComponent(key)}`;
   const res = await fetch(url);
   const json = await res.json();
   if (json.status === "error") throw new Error(json.message || "API_ERROR");
-  return json;
+  const price = parseFloat(json.price);
+  if (!isFinite(price)) throw new Error("NO_PRICE");
+  return price;
 }
 
 /* ============================== チャート構築 ============================== */
@@ -867,9 +883,30 @@ async function loadAll(showStatus = true) {
   }
 }
 
+// ヘッダーの現在値だけを軽量エンドポイントで短い間隔で更新する。
+// ローソク足(チャートの時間足)の更新間隔とは切り離すことで、
+// 「1時間足を見ている間はヘッダー価格も1時間更新されない」ような体感の遅延を防ぐ。
+async function refreshPriceOnly() {
+  if (!getApiKey() || !state.candles.length) return;
+  try {
+    const price = await fetchPrice();
+    state.lastPrice = price; // prevCloseは直近確定足の終値のまま保持し、騰落表示の基準をぶらさない
+    updatePriceHeader();
+    checkAlerts();
+  } catch (e) {
+    console.warn("price poll failed", e); // 一時的な失敗は無視し、次のポーリングで回復させる
+  }
+}
+
 function scheduleRefresh() {
   if (state.refreshTimer) clearInterval(state.refreshTimer);
   state.refreshTimer = setInterval(() => loadAll(false), getRefreshMs());
+}
+
+let priceTimer = null;
+function schedulePricePolling() {
+  if (priceTimer) clearInterval(priceTimer);
+  priceTimer = setInterval(refreshPriceOnly, getPriceRefreshMs());
 }
 
 /* ============================== アラート ============================== */
@@ -1047,6 +1084,7 @@ function buildChips() {
 
 function openSettings() {
   document.getElementById("api-key-input").value = getApiKey();
+  document.getElementById("price-refresh-interval").value = String(getPriceRefreshMs());
   document.getElementById("refresh-interval").value = String(getRefreshMs());
   document.getElementById("sr-count").value = String(getSrCount());
   document.getElementById("sr-tolerance").value = String(getSrTolerancePct());
@@ -1060,12 +1098,15 @@ document.getElementById("settings-backdrop").addEventListener("click", (e) => { 
 document.getElementById("settings-save").addEventListener("click", () => {
   const key = document.getElementById("api-key-input").value.trim();
   localStorage.setItem(LS.apiKey, key);
+  localStorage.setItem(LS.priceRefreshMs, document.getElementById("price-refresh-interval").value);
   localStorage.setItem(LS.refreshMs, document.getElementById("refresh-interval").value);
   localStorage.setItem(LS.srCount, document.getElementById("sr-count").value);
   localStorage.setItem(LS.srTolerance, document.getElementById("sr-tolerance").value);
   closeSettings();
   loadAll();
+  refreshPriceOnly();
   scheduleRefresh();
+  schedulePricePolling();
 });
 
 /* ============================== 起動 ============================== */
@@ -1076,8 +1117,9 @@ renderSignalList();
 document.getElementById("signal-notify-toggle").checked = getSignalNotify();
 resizeCharts();
 if (!getApiKey()) { openSettings(); }
-loadAll();
+loadAll().then(() => refreshPriceOnly());
 scheduleRefresh();
+schedulePricePolling();
 
 if ("serviceWorker" in navigator) {
   window.addEventListener("load", () => {
